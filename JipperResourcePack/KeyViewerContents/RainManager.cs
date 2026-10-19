@@ -13,6 +13,11 @@ public class RainManager : MonoBehaviour {
     }
 
     internal void RefreshDisplay() {
+        AddQueuedRain();
+        RefreshRain();
+    }
+
+    private void AddQueuedRain() {
         while(RawRainQueue.TryDequeue(out RawRain rawRain)) {
             Rain rainComponent = rawRain.Key.RainPool.GetOrNewRain(rawRain.IsGhost);
             rainComponent.Image.color = rawRain.Key.Color switch {
@@ -24,6 +29,9 @@ public class RainManager : MonoBehaviour {
             rainComponent.Transform.SetSiblingIndex(rawRain.IsGhost ? rawRain.Key.SiblingIndex + 1 : rawRain.Key.SiblingIndex);
             RainList.Add(rainComponent);
         }
+    }
+
+    private void RefreshRain() {
         if(RainList.Count == 0) return;
         long time = KeyViewer.CurrentTicks;
         float speed = KeyViewer.Settings.rainSpeed;
@@ -41,27 +49,13 @@ public class RainManager : MonoBehaviour {
             }
             float y = (time - rawRain.StartTime) / RawRain.RainTickUnit * speed;
             if(rawRain.FinishSize) {
-                if(y > height) {
-                    float sizeY = rawRain.FinalSizeY - y + height;
-                    if(sizeY < 0) {
-                        int last = RainList.Count - 1;
-                        RainList[i--] = RainList[last];
-                        RainList.RemoveAt(last);
-                        RawRain.AddPool(rawRain);
-                        rain.RawRain = null;
-                        rain.Pool.AddPool(rain, rain.IsGhost);
-                        continue;
-                    }
-                    rain.Transform.sizeDelta = new Vector2(rawRain.XSize, sizeY);
-                    if(rawRain.SizeOver) continue;
-                    rain.Transform.anchoredPosition = new Vector2(0, height);
-                    rawRain.SizeOver = true;
-                } else {
-                    rain.Transform.anchoredPosition = new Vector2(0, y);
-                    if(rawRain.FinishSizeSetup) continue;
-                    rain.Transform.sizeDelta = new Vector2(rawRain.XSize, rawRain.FinalSizeY);
-                    rawRain.FinishSizeSetup = true;
-                }
+                if(RefreshFinishedRain(rain, rawRain, y, height)) continue;
+                int last = RainList.Count - 1;
+                RainList[i--] = RainList[last];
+                RainList.RemoveAt(last);
+                RawRain.AddPool(rawRain);
+                rain.RawRain = null;
+                rain.Pool.AddPool(rain, rain.IsGhost);
             } else {
                 if(y > height) {
                     if(rawRain.SizeOver) continue;
@@ -74,5 +68,22 @@ public class RainManager : MonoBehaviour {
                 }
             }
         }
+    }
+
+    private static bool RefreshFinishedRain(Rain rain, RawRain rawRain, float y, float height) {
+        if(y > height) {
+            float sizeY = rawRain.FinalSizeY - y + height;
+            if(sizeY < 0) return false;
+            rain.Transform.sizeDelta = new Vector2(rawRain.XSize, sizeY);
+            if(rawRain.SizeOver) return true;
+            rain.Transform.anchoredPosition = new Vector2(0, height);
+            rawRain.SizeOver = true;
+        } else {
+            rain.Transform.anchoredPosition = new Vector2(0, y);
+            if(rawRain.FinishSizeSetup) return true;
+            rain.Transform.sizeDelta = new Vector2(rawRain.XSize, rawRain.FinalSizeY);
+            rawRain.FinishSizeSetup = true;
+        }
+        return true;
     }
 }

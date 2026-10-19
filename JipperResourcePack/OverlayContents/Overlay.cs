@@ -477,7 +477,7 @@ public class Overlay {
         int timeInt = (int) time;
         StringBuilder sb = VersionSafe.GetSharedBuilder();
 
-        if(timeInt >= 3600) sb.Append(timeInt / 3600).Append(':').Append(timeInt % 3600 / 60);
+        if(timeInt >= 3600) sb.Append(timeInt / 3600).Append(':').Append((timeInt % 3600) / 60);
         else sb.Append(timeInt / 60);
 
         sb.Append(':').Append(timeInt % 60);
@@ -525,7 +525,7 @@ public class Overlay {
         if(hour) {
             index = WriteNumber(buffer, index, time / 3600);
             buffer[index++] = ':';
-            index = WriteTwoDigits(buffer, index, time % 3600 / 60);
+            index = WriteTwoDigits(buffer, index, (time % 3600) / 60);
         } else index = WriteNumber(buffer, index, time / 60);
         buffer[index++] = ':';
         return WriteTwoDigits(buffer, index, time % 60);
@@ -539,15 +539,15 @@ public class Overlay {
         int end = index + 1;
         for(int i = value / 10; i > 0; i /= 10) end++;
         for(int i = end - 1; i >= index; i--) {
-            buffer[i] = (char) ('0' + value % 10);
+            buffer[i] = (char) ('0' + (value % 10));
             value /= 10;
         }
         return end;
     }
 
     public static int WriteTwoDigits(char[] buffer, int index, int value) {
-        buffer[index] = (char) ('0' + value / 10);
-        buffer[index + 1] = (char) ('0' + value % 10);
+        buffer[index] = (char) ('0' + (value / 10));
+        buffer[index + 1] = (char) ('0' + (value % 10));
         return index + 2;
     }
 
@@ -567,7 +567,7 @@ public class Overlay {
         buffer[index++] = '.';
         int end = index + decimals;
         for(int i = end - 1; i >= index; i--) {
-            buffer[i] = (char) ('0' + fraction % 10);
+            buffer[i] = (char) ('0' + (fraction % 10));
             fraction /= 10;
         }
         while(buffer[end - 1] == '0') end--;
@@ -616,7 +616,7 @@ public class Overlay {
             _comboAnimating = false;
             _stopwatch.Stop();
         }
-        float size = 30 * OutExpoChange(t) + 78;
+        float size = (30 * OutExpoChange(t)) + 78;
         if(replaying && !_comboDirty && ComboText.fontSize == size) return;
         ComboText.fontSize = size;
         _comboDirty = false;
