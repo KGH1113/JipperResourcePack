@@ -122,7 +122,9 @@ public static class VersionSafe {
     public static KeyLabel UnityKeyToSkyHookKey(KeyCode key) => AsyncKeyMapper.UnityKeyToAsyncKey(key);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+#pragma warning disable CS0618 // Type or member is obsolete
     public static T FindAnyObjectByType<T>() where T : Object => Object.FindObjectOfType<T>();
+#pragma warning restore CS0618 // Type or member is obsolete
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Color GetOrange() => new Color(1f, 0.6470588f, 0.0f, 1f);
@@ -146,12 +148,11 @@ public static class VersionSafe {
 #if R149After
     public static bool XScoreSupported => true;
 
-    public static string WriteHitMarginText(int[] hits, string prefix, string postfix) {
+    public static void AppendHitMarginText(StringBuilder sb, int[] hits, string prefix, string postfix) {
         bool competitive = Persistence.enableCompetitiveMode;
         int diff = DigitCount(hits[11]) + DigitCount(hits[0]) + DigitCount(hits[1]) + DigitCount(hits[2])
                    - DigitCount(hits[6]) - DigitCount(hits[7]) - DigitCount(hits[8]) - DigitCount(hits[10]);
         if(competitive) diff += DigitCount(hits[3]) - DigitCount(hits[5]);
-        StringBuilder sb = GetSharedBuilder();
         AppendBalance(sb, -diff);
         sb.Append(prefix).Append(hits[11])
             .Append(" <color=red>").Append(hits[0])
@@ -167,15 +168,13 @@ public static class VersionSafe {
             .Append("</color> ").Append(hits[10])
             .Append(postfix);
         AppendBalance(sb, diff);
-        return sb.ToString();
     }
 
-    public static string WriteHitMarginTextWithoutColor(int[] hits, string prefix, string postfix) {
+    public static void AppendHitMarginTextWithoutColor(StringBuilder sb, int[] hits, string prefix, string postfix) {
         bool competitive = Persistence.enableCompetitiveMode;
         int diff = DigitCount(hits[11]) + DigitCount(hits[0]) + DigitCount(hits[1]) + DigitCount(hits[2])
                    - DigitCount(hits[6]) - DigitCount(hits[7]) - DigitCount(hits[8]) - DigitCount(hits[10]);
         if(competitive) diff += DigitCount(hits[3]) - DigitCount(hits[5]);
-        StringBuilder sb = GetSharedBuilder();
         AppendBalance(sb, -diff);
         sb.Append(prefix).Append(hits[11])
             .Append(' ').Append(hits[0])
@@ -191,7 +190,6 @@ public static class VersionSafe {
             .Append(' ').Append(hits[10])
           .Append(postfix);
         AppendBalance(sb, diff);
-        return sb.ToString();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -209,10 +207,9 @@ public static class VersionSafe {
 #else
     public static bool XScoreSupported => false;
 
-    public static string WriteHitMarginText(int[] hits, string prefix, string postfix) {
+    public static void AppendHitMarginText(StringBuilder sb, int[] hits, string prefix, string postfix) {
         int diff = DigitCount(hits[9]) + DigitCount(hits[0]) + DigitCount(hits[1]) + DigitCount(hits[2])
                    - DigitCount(hits[4]) - DigitCount(hits[5]) - DigitCount(hits[6]) - DigitCount(hits[8]);
-        StringBuilder sb = GetSharedBuilder();
         AppendBalance(sb, -diff);
         sb.Append(prefix).Append(hits[9])
             .Append(" <color=red>").Append(hits[0])
@@ -225,13 +222,11 @@ public static class VersionSafe {
             .Append("</color> ").Append(hits[8])
             .Append(postfix);
         AppendBalance(sb, diff);
-        return sb.ToString();
     }
 
-    public static string WriteHitMarginTextWithoutColor(int[] hits, string prefix, string postfix) {
+    public static void AppendHitMarginTextWithoutColor(StringBuilder sb, int[] hits, string prefix, string postfix) {
         int diff = DigitCount(hits[9]) + DigitCount(hits[0]) + DigitCount(hits[1]) + DigitCount(hits[2])
                    - DigitCount(hits[4]) - DigitCount(hits[5]) - DigitCount(hits[6]) - DigitCount(hits[8]);
-        StringBuilder sb = GetSharedBuilder();
         AppendBalance(sb, -diff);
         sb.Append(prefix).Append(hits[9])
             .Append(' ').Append(hits[0])
@@ -244,7 +239,6 @@ public static class VersionSafe {
             .Append(' ').Append(hits[8])
             .Append(postfix);
         AppendBalance(sb, diff);
-        return sb.ToString();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

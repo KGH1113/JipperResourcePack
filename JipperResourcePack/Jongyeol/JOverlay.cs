@@ -1,9 +1,11 @@
-﻿using System;
+using System;
 using System.Linq;
+using System.Text;
 using ADOFAI;
 using JipperResourcePack.OverlayContents;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Scripting;
 
 namespace JipperResourcePack.Jongyeol;
 
@@ -11,6 +13,7 @@ public class JOverlay : Overlay {
     public static new JOverlay Instance;
     public new IJOverlayTextManager OverlayTextManager;
     public TextMeshProUGUI FPSText;
+    public TextMeshProUGUI MemoryText;
     public TextMeshProUGUI AuthorText;
     public TextMeshProUGUI StateText;
     public TextMeshProUGUI DeathText;
@@ -21,6 +24,10 @@ public class JOverlay : Overlay {
     private float _lastCurKps = -1;
     private static LevelData LevelData => scnGame.instance ? scnGame.instance.levelData : null;
     private float _fpsTime;
+    private float _memoryTime;
+    private float _memoryRateTime;
+    private long _memoryRateBase = -1;
+    private long _memoryRate;
 
     public JOverlay() {
         Instance = this;
@@ -35,6 +42,7 @@ public class JOverlay : Overlay {
     protected override void InitializeStatus() {
         base.InitializeStatus();
         SetupMainText("FPS", ref FPSText);
+        SetupMainText("Memory", ref MemoryText);
         SetupMainText("Author", ref AuthorText);
         SetupMainText("State", ref StateText);
         SetupMainText("Checkpoint", ref CheckpointText);
@@ -47,6 +55,7 @@ public class JOverlay : Overlay {
         int y = -15;
         bool checkAuto = !JStatus.Settings.RemoveNotRequireInAuto || !RDC.auto;
         SetupLocationMainText(FPSText, JStatus.Settings.ShowFPS, ref y);
+        SetupLocationMainText(MemoryText, JStatus.Settings.ShowMemory, ref y);
         SetupLocationMainText(AuthorText, !string.IsNullOrEmpty(LevelData?.author) && JStatus.Settings.ShowAuthor, ref y);
         SetupLocationMainText(ProgressText, JStatus.Settings.ShowProgress, ref y);
         SetupLocationMainText(AccuracyText, checkAuto && JStatus.Settings.ShowAccuracy && JStatus.Settings.AccuracyTextType != PotentialTextType.Potential, ref y);
@@ -65,6 +74,9 @@ public class JOverlay : Overlay {
         SetupLocationMainText(StartText, StartTile != 0 && JStatus.Settings.ShowStart, ref y);
         SetupLocationMainText(TimingText, checkAuto && JStatus.Settings.ShowTiming && JStatus.Settings.TimingTextType != TimingTextType.AvgTiming, ref y);
         SetupLocationMainText(AvgTimingText, checkAuto && JStatus.Settings.ShowTiming && JStatus.Settings.TimingTextType is TimingTextType.AvgTiming or TimingTextType.Both, ref y);
+        _memoryRateBase = -1;
+        _memoryRateTime = 0;
+        _memoryRate = 0;
         UpdateProgress();
         VersionSafe.CalculatePercentAcc(); // UpdateAccuracy();
         UpdateTime();
@@ -78,6 +90,7 @@ public class JOverlay : Overlay {
     public override void UpdateFont() {
         base.UpdateFont();
         FPSText.font = BundleLoader.FontAsset;
+        MemoryText.font = BundleLoader.FontAsset;
         AuthorText.font = BundleLoader.FontAsset;
         StateText.font = BundleLoader.FontAsset;
         DeathText.font = BundleLoader.FontAsset;
@@ -101,19 +114,11 @@ public class JOverlay : Overlay {
             else {
                 float time = song!.time;
                 float totalTime = song.clip?.length ?? 0;
-                if(time > 0) SongPlaying = true;
-                else if(time == 0 && SongPlaying) time = totalTime;
-                bool hourNeed = totalTime >= 3600;
-                MusicTimeCache ??= GetTimeString(totalTime, hourNeed);
-                string timeStr;
-                if(time == 0 && SongPlaying) {
-                    time = totalTime;
-                    timeStr = MusicTimeCache;
-                } else {
-                    if(time > 0) SongPlaying = true;
-                    timeStr = GetTimeString(time, hourNeed);
-                }
-                TimeText.text = "<color=white>" + (JStatus.Settings.TimeTextType == TimeTextType.Korean ? "음악 시간" : "Music Time") + " |</color> " + timeStr + "~" + MusicTimeCache;
+                if(time == 0 && SongPlaying) time = totalTime;
+                else if(time > 0) SongPlaying = true;
+                MusicTimeCache ??= GetTimeString(totalTime);
+                int length = WriteTimeText(time, totalTime, false, MusicTimeCache);
+                TimeText.SetCharArray(Main.SharedBuffer, 0, length);
                 TimeText.color = JStatus.Settings.MusicTimeColor.GetColor(time / totalTime);
             }
         }
@@ -122,27 +127,60 @@ public class JOverlay : Overlay {
             float totalTime = GetMapTotalTime();
             if(time < 0) time = 0;
             else if(time > totalTime) time = totalTime;
-            if(!JStatus.Settings.ShowMapTime && !requireMusicToMap) return;
-            bool hourNeed = totalTime >= 3600;
-            MapTimeCache ??= GetTimeString(totalTime, hourNeed);
-            // ReSharper disable once CompareOfFloatsByEqualityOperator
-            string timeStr = time == totalTime ? MapTimeCache : GetTimeString(time, hourNeed);
-            string text = "<color=white>" + (JStatus.Settings.TimeTextType == TimeTextType.Korean ? "맵 시간" : "Map Time") + " |</color> " + timeStr + "~" + MapTimeCache;
+            MapTimeCache ??= GetTimeString(totalTime);
+            int length = WriteTimeText(time, totalTime, true, MapTimeCache);
             if(JStatus.Settings.ShowMapTime) {
-                MapTimeText.text = text;
+                MapTimeText.SetCharArray(Main.SharedBuffer, 0, length);
                 MapTimeText.color = JStatus.Settings.MapTimeColor.GetColor(time / totalTime);
             }
             if(requireMusicToMap) {
-                TimeText.text = text;
+                TimeText.SetCharArray(Main.SharedBuffer, 0, length);
                 TimeText.color = JStatus.Settings.MusicTimeColor.GetColor(time / totalTime);
             }
         }
     }
-    
-    private static string GetTimeString(float time, bool hour) {
-        int timeInt = (int) time;
-        return hour ? timeInt / 3600 + ":" + (timeInt % 3600 / 60).ToString("00") + ":" + (time % 60).ToString("00.0") :
-                      timeInt / 60 + ":" + (time % 60).ToString("00.0");
+
+    private static string GetTimeString(float time) {
+        StringBuilder sb = VersionSafe.GetSharedBuilder();
+        int tenths = (int) (time * 10);
+        int timeInt = tenths / 10;
+
+        if(timeInt >= 3600) sb.Append(timeInt / 3600).Append(':').Append(timeInt % 3600 / 60);
+        else sb.Append(timeInt / 60);
+
+        sb.Append(':').Append(timeInt % 60)
+          .Append('.').Append(tenths % 10);
+        return sb.ToString();
+    }
+
+    private static int WriteTimeText(float time, float totalTime, bool isMap, string timeCache) {
+        bool hour = totalTime >= 3600;
+        bool isEnglish = JStatus.Settings.TimeTextType == TimeTextType.English;
+        int requirePrefix = (isMap ? 2 : 0) | (isEnglish ? 1 : 0);
+        char[] buffer = Main.SharedBuffer;
+
+        int index = WriteText(buffer, "<color=white>", 0);
+        index = WriteText(buffer, TimePrefixTexts[requirePrefix], index);
+        index = WriteText(buffer, " |</color> ", index);
+
+        index = WriteTime(buffer, index, time, hour);
+        buffer[index++] = '~';
+        return WriteText(buffer, timeCache, index);
+    }
+
+    private static int WriteTime(char[] buffer, int index, float time, bool hour) {
+        int tenths = (int) (time * 10);
+        int timeInt = tenths / 10;
+        if(hour) {
+            index = WriteNumber(buffer, index, timeInt / 3600);
+            buffer[index++] = ':';
+            index = WriteTwoDigits(buffer, index, timeInt % 3600 / 60);
+        } else index = WriteNumber(buffer, index, timeInt / 60);
+        buffer[index++] = ':';
+        index = WriteTwoDigits(buffer, index, timeInt % 60);
+        buffer[index++] = '.';
+        buffer[index++] = (char) ('0' + tenths % 10);
+        return index;
     }
 
     public override Color UpdateComboColor(int combo) {
@@ -160,13 +198,63 @@ public class JOverlay : Overlay {
 
     public void UpdateFPS(float deltaTime) {
         if(!JStatus.Settings.ShowFPS || !GameObject.activeSelf || (_fpsTime += deltaTime) < 0.01f) return;
-        FPSText.text = "FPS | " + (1 / deltaTime).ToString("F4");
+        long fps = (long) (10000.0 / deltaTime + 0.5);
+        char[] buffer = Main.SharedBuffer;
+        int index = WriteText(buffer, "FPS | ", 0);
+        index = WriteNumber(buffer, index, (int) (fps / 10000));
+        buffer[index++] = '.';
+        int fraction = (int) (fps % 10000);
+        for(int i = index + 3; i >= index; i--) {
+            buffer[i] = (char) ('0' + fraction % 10);
+            fraction /= 10;
+        }
+        FPSText.SetCharArray(buffer, 0, index + 4);
         _fpsTime %= 0.01f;
+    }
+
+    public void UpdateMemory(float deltaTime) {
+        if(!JStatus.Settings.ShowMemory || !GameObject.activeSelf || (_memoryTime += deltaTime) < 0.1f) return;
+        long memory = GC.GetTotalMemory(false);
+        if(_memoryRateBase == -1) _memoryRateBase = memory;
+        if((_memoryRateTime += _memoryTime) >= 1) {
+            _memoryRate = (long) ((memory - _memoryRateBase) / _memoryRateTime);
+            _memoryRateBase = memory;
+            _memoryRateTime = 0;
+        }
+        _memoryTime = 0;
+
+        char[] buffer = Main.SharedBuffer;
+        long hundredths = (memory * 100 + 524288) / 1048576;
+        int index = WriteText(buffer, "Memory | ", 0);
+        index = WriteNumber(buffer, index, (int) (hundredths / 100));
+        buffer[index++] = '.';
+        index = WriteTwoDigits(buffer, index, (int) (hundredths % 100));
+        index = WriteText(buffer, " MB (", index);
+        long rate = _memoryRate / 1024;
+        buffer[index++] = rate < 0 ? '-' : '+';
+        index = WriteNumber(buffer, index, (int) Math.Abs(rate));
+        index = WriteText(buffer, " KB/s)", index);
+        GarbageCollector.Mode gcMode = GarbageCollector.GCMode;
+        index = WriteText(buffer, gcMode switch {
+            GarbageCollector.Mode.Enabled => " | GC On",
+            GarbageCollector.Mode.Disabled => " | GC Off",
+            _ => " | GC Manual"
+        }, index);
+        MemoryText.SetCharArray(buffer, 0, index);
     }
 
     private void UpdateAuthor() {
         if(!JStatus.Settings.ShowAuthor || !GameObject.activeSelf) return;
-        AuthorText.text = "Author | " + (LevelData?.author ?? "");
+        const string prefix = "Author | ";
+        string author = LevelData?.author ?? "";
+        char[] buffer = Main.SharedBuffer;
+        if(prefix.Length + author.Length > buffer.Length) {
+            AuthorText.text = prefix + author;
+            return;
+        }
+        int index = WriteText(buffer, prefix, 0);
+        index = WriteText(buffer, author, index);
+        AuthorText.SetCharArray(buffer, 0, index);
     }
 
     public void UpdateState(scrPlanet planet = null) {
@@ -182,7 +270,13 @@ public class JOverlay : Overlay {
 
     private void UpdateStart() {
         if(!JStatus.Settings.ShowStart || !GameObject.activeSelf || StartTile != scrController.instance.currentSeqID) return;
-        StartText.text = "Start | " + StartTile + " (" + Math.Round(OverlayTextManager.GetProgress() * 100, 5) + "%)";
+        char[] buffer = Main.SharedBuffer;
+        int index = WriteText(buffer, "Start | ", 0);
+        index = WriteNumber(buffer, index, StartTile);
+        index = WriteText(buffer, " (", index);
+        index = WriteRounded(buffer, index, OverlayTextManager.GetProgress() * 100, 5);
+        index = WriteText(buffer, "%)", index);
+        StartText.SetCharArray(buffer, 0, index);
     }
 
     public override void UpdateBpm() {
@@ -200,10 +294,23 @@ public class JOverlay : Overlay {
         if(isPesudo) kps *= count;
         // ReSharper disable CompareOfFloatsByEqualityOperator
         if(LastTileBpm == bpm && LastCurBpm == cbpm && _lastCurKps == kps) return;
-        BpmText.text = "<color=white>TBPM | <color=#" + ColorToHex(Jbpm.Settings.BpmColor.GetColor(bpm / Jbpm.Settings.BpmColorMax)) + ">" + Math.Round(bpm, Jbpm.Settings.DecimalPlaces) +
-                       "</color>\nCBPM |</color> " + Math.Round(cbpm, Jbpm.Settings.DecimalPlaces) +
-                       "\n<color=white>KPS |</color> " + (isPesudo ? "<color=#" + ColorToHex(Jbpm.Settings.BpmColor.GetColor(cbpm * count / Jbpm.Settings.BpmColorMax)) + ">" : "") +
-                       Math.Round(kps, Jbpm.Settings.DecimalPlaces)+ (isPesudo ? "</color>" : "");
+        char[] buffer = Main.SharedBuffer;
+        int decimals = Jbpm.Settings.DecimalPlaces;
+        int index = WriteText(buffer, "<color=white>TBPM | <color=#", 0);
+        index = WriteColorHex(buffer, index, Jbpm.Settings.BpmColor.GetColor(bpm / Jbpm.Settings.BpmColorMax));
+        buffer[index++] = '>';
+        index = WriteRounded(buffer, index, bpm, decimals);
+        index = WriteText(buffer, "</color>\nCBPM |</color> ", index);
+        index = WriteRounded(buffer, index, cbpm, decimals);
+        index = WriteText(buffer, "\n<color=white>KPS |</color> ", index);
+        if(isPesudo) {
+            index = WriteText(buffer, "<color=#", index);
+            index = WriteColorHex(buffer, index, Jbpm.Settings.BpmColor.GetColor(cbpm * count / Jbpm.Settings.BpmColorMax));
+            buffer[index++] = '>';
+        }
+        index = WriteRounded(buffer, index, kps, decimals);
+        if(isPesudo) index = WriteText(buffer, "</color>", index);
+        BpmText.SetCharArray(buffer, 0, index);
         if(LastCurBpm != cbpm) BpmText.color = Jbpm.Settings.BpmColor.GetColor(cbpm / Jbpm.Settings.BpmColorMax);
         // ReSharper restore CompareOfFloatsByEqualityOperator
         LastTileBpm = bpm;
