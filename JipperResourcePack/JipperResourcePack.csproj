@@ -29,6 +29,11 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <Reference Include="TUFReplay.SDK">
+            <HintPath>../libs/TUFReplay.SDK.dll</HintPath>
+            <Private>true</Private>
+        </Reference>
+        <None Include="../libs/TUFReplay.SDK.LICENSE.md" Link="TUFReplay.SDK.LICENSE.md" CopyToOutputDirectory="PreserveNewest"/>
         <Reference Include="0Harmony">
             <HintPath>$(GameManagedPath)/UnityModManager/0Harmony.dll</HintPath>
         </Reference>
@@ -539,11 +544,11 @@
     </Target>
 
     <Target Name="CopyToModPath" AfterTargets="Build" Condition="'$(ModPath)' != ''">
-        <Copy SourceFiles="$(OutputPath)JipperResourcePack.dll" DestinationFolder="$(ModPath)/JipperResourcePack" SkipUnchangedFiles="true"/>
+        <Copy SourceFiles="$(OutputPath)JipperResourcePack.dll;$(OutputPath)TUFReplay.SDK.dll;$(OutputPath)TUFReplay.SDK.LICENSE.md" DestinationFolder="$(ModPath)/JipperResourcePack" SkipUnchangedFiles="true"/>
         <Copy SourceFiles="$(OutputPath)JipperResourcePack.pdb" DestinationFolder="$(ModPath)/JipperResourcePack" Condition="Exists('$(OutputPath)JipperResourcePack.pdb')" SkipUnchangedFiles="true"/>
     </Target>
 
     <Target Name="CopyToReleasePath" AfterTargets="Build" Condition="'$(ReleasePath)' != '' and '$(Configuration)' == 'Release'">
-        <Copy SourceFiles="$(OutputPath)JipperResourcePack.dll" DestinationFolder="$(ReleasePath)/JipperResourcePack" SkipUnchangedFiles="true"/>
+        <Copy SourceFiles="$(OutputPath)JipperResourcePack.dll;$(OutputPath)TUFReplay.SDK.dll;$(OutputPath)TUFReplay.SDK.LICENSE.md" DestinationFolder="$(ReleasePath)/JipperResourcePack" SkipUnchangedFiles="true"/>
     </Target>
 </Project>

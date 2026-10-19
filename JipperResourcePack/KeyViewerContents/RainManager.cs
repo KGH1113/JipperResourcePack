@@ -9,6 +9,10 @@ public class RainManager : MonoBehaviour {
     public readonly ConcurrentQueue<RawRain> RawRainQueue = new();
 
     private void Update() {
+        if(!TUFReplay.SDK.TUFReplaySession.IsActive) RefreshDisplay();
+    }
+
+    internal void RefreshDisplay() {
         while(RawRainQueue.TryDequeue(out RawRain rawRain)) {
             Rain rainComponent = rawRain.Key.RainPool.GetOrNewRain(rawRain.IsGhost);
             rainComponent.Image.color = rawRain.Key.Color switch {

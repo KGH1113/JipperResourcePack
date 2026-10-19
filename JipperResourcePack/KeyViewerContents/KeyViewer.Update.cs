@@ -16,19 +16,19 @@ namespace JipperResourcePack.KeyViewerContents;
 public partial class KeyViewer {
     private const long NoEventOffset = long.MinValue >> 1;
     private static readonly bool StopwatchTicksAreDateTimeTicks = System.Diagnostics.Stopwatch.Frequency == TimeSpan.TicksPerSecond;
+    private static long NativeTicks => StopwatchTicksAreDateTimeTicks ? Stopwatch.ElapsedTicks : Stopwatch.Elapsed.Ticks;
 
     public static long CurrentTicks {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => StopwatchTicksAreDateTimeTicks ? Stopwatch.ElapsedTicks : Stopwatch.Elapsed.Ticks;
+        get => _replaying ? _replayOrigin + (long) (TUFReplay.SDK.TUFReplaySession.ElapsedTime * TimeSpan.TicksPerSecond) : NativeTicks + _nativeOffset;
     }
 
     private readonly bool[] _keyState = new bool[GhostOutIndex];
     private ConcurrentQueue<long> _pressTimes;
-    private ConcurrentQueue<KeyEvent> _eventQueue;
+    private volatile KeyEventQueue _eventQueue;
     private SemaphoreSlim _eventSignal;
     private volatile bool _listening;
     private KeyBinding _keyBinding;
-    private long _eventOffsetTicks = NoEventOffset;
     private volatile int _capturedKeyCode;
     private int _lastKpsCount;
     private int _lastTotalCount;
@@ -129,7 +129,7 @@ public partial class KeyViewer {
     }
 
     private void StartEventListener() {
-        _eventQueue = new ConcurrentQueue<KeyEvent>();
+        _eventQueue = new KeyEventQueue();
         _eventSignal = new SemaphoreSlim(0);
         _listening = true;
         new Thread(ProcessKeyEvents) {
@@ -148,20 +148,25 @@ public partial class KeyViewer {
     }
 
     private void OnKeyEvent(SkyHookEvent hookEvent) {
-        ConcurrentQueue<KeyEvent> queue = _eventQueue;
+        // A callback already in flight keeps its old queue when the input source changes.
+        KeyEventQueue queue = _eventQueue;
+        if(_replaying) return;
         SemaphoreSlim signal = _eventSignal;
         if(queue == null || signal == null) return;
-        queue.Enqueue(new KeyEvent(hookEvent.Label, hookEvent.Key, hookEvent.Type == EventType.KeyPressed, ToStopwatchTicks(hookEvent.GetTimeInTicks())));
+        queue.Enqueue(new KeyEvent(hookEvent.Label, hookEvent.Key, hookEvent.Type == EventType.KeyPressed, ToStopwatchTicks(hookEvent.GetTimeInTicks(), queue)));
         signal.Release();
     }
 
     private void ProcessKeyEvents() {
-        ConcurrentQueue<KeyEvent> queue = _eventQueue;
         SemaphoreSlim signal = _eventSignal;
         while(_listening) {
             try {
                 signal.Wait();
-                while(_listening && queue.TryDequeue(out KeyEvent keyEvent)) ProcessKeyEvent(keyEvent);
+                lock(_inputGate) {
+                    KeyEventQueue queue = _eventQueue;
+                    while(_listening && !_replaying && queue.TryDequeue(out KeyEvent keyEvent))
+                        ProcessKeyEvent(keyEvent);
+                }
             } catch (ThreadAbortException) {
                 // Handle thread abort if necessary
             } catch (Exception e) {
@@ -175,10 +180,10 @@ public partial class KeyViewer {
         KeyBinding binding = _keyBinding;
         if(binding == null || !Enabled) return;
         bool pressed = keyEvent.Pressed;
-        if(pressed && _selectedKey != -1 && _changeState != 1) {
+        if(pressed && keyEvent.Key.HasValue && _selectedKey != -1 && _changeState != 1) {
             KeyCode capturedKey = VersionSafe.SkyHookKeyToUnityKey(keyEvent.Label);
             _capturedKeyCode = capturedKey switch {
-                KeyCode.None => keyEvent.Key + 0x1000,
+                KeyCode.None => keyEvent.Key.Value + 0x1000,
                 KeyCode.Less => (int) KeyCode.Comma,
                 KeyCode.Greater => (int) KeyCode.Equals,
                 KeyCode.Pipe => (int) KeyCode.Backslash,
@@ -187,22 +192,23 @@ public partial class KeyViewer {
         }
         bool counted = false;
         if(binding.LabelMap.TryGetValue(keyEvent.Label, out int[] indexes)) counted = Work(indexes, pressed, keyEvent.Ticks);
-        if(binding.NativeMap.TryGetValue(keyEvent.Key, out indexes)) counted |= Work(indexes, pressed, keyEvent.Ticks);
-        if(counted && Enabled) KeyCountData.Instance.Save();
+        if(keyEvent.Key is ushort nativeKey && binding.NativeMap.TryGetValue(nativeKey, out indexes)) counted |= Work(indexes, pressed, keyEvent.Ticks);
+        if(counted && Enabled && !_replaying) KeyCountData.Instance.Save();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private long ToStopwatchTicks(long eventTicks) {
-        long now = CurrentTicks;
-        long currentTicks = eventTicks - _eventOffsetTicks;
+    private long ToStopwatchTicks(long eventTicks, KeyEventQueue queue) {
+        long now = NativeTicks + _nativeOffset;
+        long currentTicks = eventTicks - queue.OffsetTicks;
         if(currentTicks < now) return currentTicks;
-        _eventOffsetTicks = eventTicks - now;
+        queue.OffsetTicks = eventTicks - now;
         return now;
     }
 
     private bool Work(int[] indexes, bool pressed, long currentTicks) {
         KeyViewerSetting settings = Settings;
-        KeyCountData countData = KeyCountData.Instance;
+        bool replaying = _replaying;
+        KeyCountData countData = replaying ? _replayCounts : KeyCountData.Instance;
         bool counted = false;
         foreach(int index in indexes) {
             if(index >= FootOutIndex) {
@@ -221,7 +227,8 @@ public partial class KeyViewer {
             Key key = Keys[index];
             if(key == null || _keyState[index] == pressed) continue;
             _keyState[index] = pressed;
-            key.UpdateRequestKey(pressed);
+            if(replaying) _replayDirtyKeys |= 1UL << index;
+            else key.UpdateRequestKey(pressed);
             if(index >= HandOutIndex) {
                 if(!pressed) continue;
                 countData.Count[index]++;
@@ -235,7 +242,8 @@ public partial class KeyViewer {
                 continue;
             }
             int countIndex = index == 9 && settings.KeyViewerStyle == KeyviewerStyle.Key10 ? 10 : index;
-            key.Value.Text = (++countData.Count[countIndex]).ToString();
+            countData.Count[countIndex]++;
+            if(!replaying) key.Value.Text = countData.Count[countIndex].ToString();
             countData.TotalCount++;
             _pressTimes?.Enqueue(currentTicks);
             counted = true;
@@ -246,9 +254,18 @@ public partial class KeyViewer {
         return counted;
     }
 
-    private readonly struct KeyEvent(KeyLabel label, ushort key, bool pressed, long ticks) {
+    private void ReleaseHeldKeys() {
+        long ticks = CurrentTicks;
+        for(int i = 0; i < _keyState.Length; i++) {
+            if(!_keyState[i]) continue;
+            _releaseIndex[0] = i;
+            Work(_releaseIndex, false, ticks);
+        }
+    }
+
+    private readonly struct KeyEvent(KeyLabel label, ushort? key, bool pressed, long ticks) {
         public readonly KeyLabel Label = label;
-        public readonly ushort Key = key;
+        public readonly ushort? Key = key;
         public readonly bool Pressed = pressed;
         public readonly long Ticks = ticks;
     }
@@ -260,6 +277,10 @@ public partial class KeyViewer {
 
     public class KeyViewerUpdater : MonoBehaviour {
         private void Update() {
+            if(!TUFReplay.SDK.TUFReplaySession.IsActive) RefreshDisplay();
+        }
+
+        internal void RefreshDisplay() {
             KeyViewer instance = Instance;
             ConcurrentQueue<long> pressTimes = instance._pressTimes;
             if(pressTimes == null) return;
@@ -273,7 +294,7 @@ public partial class KeyViewer {
                 }
             }
             if(instance.Total == null) return;
-            int totalCount = KeyCountData.Instance.TotalCount;
+            int totalCount = _replaying ? _replayCounts.TotalCount : KeyCountData.Instance.TotalCount;
             if(totalCount == instance._lastTotalCount) return;
             instance._lastTotalCount = totalCount;
             instance.Total.Value.TMP.text = totalCount.ToString();

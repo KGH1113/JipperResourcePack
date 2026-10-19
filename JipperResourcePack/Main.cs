@@ -16,7 +16,7 @@ using UnityEngine.SceneManagement;
 namespace JipperResourcePack;
 
 // ReSharper disable once ClassNeverInstantiated.Global
-public class Main() : JAMod(typeof(ResourcePackSetting)) {
+public partial class Main() : JAMod(typeof(ResourcePackSetting)) {
     // ReSharper disable once UnassignedField.Global
     public static Main Instance;
     public static SettingGUI SettingGUI;
@@ -73,6 +73,7 @@ public class Main() : JAMod(typeof(ResourcePackSetting)) {
     }
     
     protected override void OnEnable() {
+        ConnectReplay();
         SceneManager.sceneUnloaded += OnSceneUnloaded;
         BundleLoader.LoadBundle();
         PlayCount.Load();
@@ -80,6 +81,8 @@ public class Main() : JAMod(typeof(ResourcePackSetting)) {
     }
 
     protected override void OnDisable() {
+        _replay?.Dispose();
+        _replay = null;
         SceneManager.sceneUnloaded -= OnSceneUnloaded;
         try {
             PlayCount.Dispose();
@@ -100,7 +103,7 @@ public class Main() : JAMod(typeof(ResourcePackSetting)) {
     }
     
     protected override void OnUpdate(float deltaTime) {
-        Overlay.Instance.UpdateTime();
+        if(!_replayExcluded) Overlay.Instance.UpdateTime();
         Overlay.Instance.UpdateComboSize();
         JMain.Update(deltaTime);
     }

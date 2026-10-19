@@ -13,6 +13,8 @@ namespace JipperResourcePack.OverlayContents;
 
 public static class PlayCount {
     private static Dictionary<Hash, PlayData> _datas;
+    private static Dictionary<Hash, PlayData> _replayData;
+    internal static void ClearReplayData() => _replayData?.Clear();
     private static string FilePath => Path.Combine(Main.Instance.Path, "Plays.dat");
 
     public static void Load() {
@@ -81,8 +83,10 @@ public static class PlayCount {
     }
 
     public static PlayData GetData(Hash hash) {
-        if(!_datas.ContainsKey(hash)) _datas[hash] = new PlayData();
-        return _datas[hash];
+        if(_datas.TryGetValue(hash, out PlayData data)) return data;
+        Dictionary<Hash, PlayData> target = TUFReplay.SDK.TUFReplaySession.IsActive ? _replayData ??= new() : _datas;
+        if(!target.TryGetValue(hash, out data)) target[hash] = data = new PlayData();
+        return data;
     }
 
     public class PlayData {
@@ -91,12 +95,14 @@ public static class PlayCount {
         private readonly Dictionary<(float, float), float> _best = new();
 
         public void AddAttempts(float progress, float multiplier) {
+            if(TUFReplay.SDK.TUFReplaySession.IsActive) return;
             if(!_attempts.TryAdd((progress, multiplier), 1)) _attempts[(progress, multiplier)]++;
             _totalAttempts++;
             Save();
         }
 
         public void RemoveAttempts(float progress, float multiplier) {
+            if(TUFReplay.SDK.TUFReplaySession.IsActive) return;
             if(!_attempts.TryGetValue((progress, multiplier), out int value)) return;
             if(value == 1) _attempts.Remove((progress, multiplier));
             else _attempts[(progress, multiplier)]--;
@@ -105,6 +111,7 @@ public static class PlayCount {
         }
 
         public void SetBest(float start, float cur, float multiplier) {
+            if(TUFReplay.SDK.TUFReplaySession.IsActive) return;
             (float, float) key = (start, multiplier);
             if(_best.TryAdd(key, cur)) return;
             if(!(_best[key] < cur)) return;

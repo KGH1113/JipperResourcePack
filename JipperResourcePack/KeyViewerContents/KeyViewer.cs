@@ -106,14 +106,16 @@ public partial class KeyViewer : Feature {
         AsyncInputHook.Acquire();
         _pressTimes = new ConcurrentQueue<long>();
         Stopwatch = Stopwatch.StartNew();
-        _eventOffsetTicks = NoEventOffset;
+        _nativeOffset = 0;
         RebuildKeyBinding();
         StartEventListener();
+        if(TUFReplay.SDK.TUFReplaySession.IsActive) BeginReplay();
         UpdateKeyLimit();
     }
 
     protected override void OnDisable() {
         if(!KeyViewerObject) return;
+        EndReplay();
         StopEventListener();
         AsyncInputHook.Release();
         Object.Destroy(KeyViewerObject);
@@ -726,7 +728,7 @@ public partial class KeyViewer : Feature {
     private void InitializeKeyViewer() {
         _lastYLocation = Settings.YLocation;
         _lastKpsCount = 0;
-        _lastTotalCount = KeyCountData.Instance.TotalCount;
+        _lastTotalCount = _replaying ? _replayCounts.TotalCount : KeyCountData.Instance.TotalCount;
         _currentKeyMaxY = Settings.KeyViewerStyle switch {
             KeyviewerStyle.Key10 or KeyviewerStyle.Key12 => 976,
             KeyviewerStyle.Key20 => 922,
@@ -1001,7 +1003,7 @@ public partial class KeyViewer : Feature {
                 return;
             case -2:
                 key.Text.SetTextForce("Total");
-                key.Value.SetTextForce(KeyCountData.Instance.TotalCount.ToString());
+                key.Value.SetTextForce((_replaying ? _replayCounts.TotalCount : KeyCountData.Instance.TotalCount).ToString());
                 return;
             default:
                 KeyCode[] keyCodes;
@@ -1011,7 +1013,7 @@ public partial class KeyViewer : Feature {
                     string[] keyText = GetKeyText();
                     key.Text.SetTextForce(keyText[i] ?? KeyToString(keyCodes[i]));
                     if(i == 9 && settings.KeyViewerStyle == KeyviewerStyle.Key10) i = 10;
-                    key.Value.SetTextForce(KeyCountData.Instance.Count[i].ToString());
+                    key.Value.SetTextForce((_replaying ? _replayCounts.Count[i] : KeyCountData.Instance.Count[i]).ToString());
                 } else {
                     keyCodes = GetFootKeyCode();
                     key.Text.SetTextForce(KeyToString(keyCodes[i - HandOutIndex]));

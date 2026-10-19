@@ -50,6 +50,10 @@ public class Overlay {
     protected float LastTileBpm = -1;
     protected float LastCurBpm = -1;
     private readonly Stopwatch _stopwatch;
+    private double _replayComboStart;
+    private bool _comboAnimating;
+    private bool _comboDirty;
+    private bool _playStartedDuringRender;
     protected bool SongPlaying;
     public float StartProgress;
     public bool AutoOnceEnabled;
@@ -475,14 +479,22 @@ public class Overlay {
         if(!GameObject.activeSelf) return;
         ComboText.text = combo.ToString();
         ComboText.color = UpdateComboColor(combo);
+        _comboDirty = true;
         if(bump) {
-            _stopwatch.Restart();
+            _comboAnimating = true;
+            if(TUFReplay.SDK.TUFReplaySession.IsActive) {
+                _replayComboStart = TUFReplay.SDK.TUFReplaySession.ElapsedTime;
+                _stopwatch.Stop();
+            } else _stopwatch.Restart();
             UpdateComboSize();
-        } else {
-            _stopwatch.Stop();
-            ComboText.fontSize = 78;
-            ComboTransform.anchoredPosition = new Vector2(0, 43.505f);
-        }
+        } else StopComboAnimation();
+    }
+
+    internal void StopComboAnimation() {
+        _comboAnimating = false;
+        _stopwatch.Stop();
+        ComboText.fontSize = 78;
+        ComboTransform.anchoredPosition = new Vector2(0, 43.505f);
     }
 
     public virtual Color UpdateComboColor(int combo) {
@@ -491,14 +503,28 @@ public class Overlay {
     }
 
     public void UpdateComboSize() {
-        if(!_stopwatch.IsRunning || !GameObject.activeSelf) return;
-        double t = _stopwatch.Elapsed.TotalMilliseconds / 500;
+        if(!TUFReplay.SDK.TUFReplaySession.IsActive) RefreshCombo();
+    }
+
+    internal void RefreshCombo() {
+        if(!_comboAnimating || !GameObject.activeSelf) return;
+        bool replaying = TUFReplay.SDK.TUFReplaySession.IsActive;
+        double t = replaying
+            ? (TUFReplay.SDK.TUFReplaySession.ElapsedTime - _replayComboStart) / 0.5
+            : _stopwatch.Elapsed.TotalMilliseconds / 500;
         if(t > 1) {
             t = 1;
+            _comboAnimating = false;
             _stopwatch.Stop();
         }
-        ComboText.fontSize = 30 * OutExpoChange(t) + 78;
-        Task.Yield().OnCompleted(UpdateComboLocation);
+        float size = 30 * OutExpoChange(t) + 78;
+        if(replaying && !_comboDirty && ComboText.fontSize == size) return;
+        ComboText.fontSize = size;
+        _comboDirty = false;
+        if(replaying) {
+            ComboText.ForceMeshUpdate();
+            UpdateComboLocation();
+        } else Task.Yield().OnCompleted(UpdateComboLocation);
     }
 
     private void UpdateComboLocation() {
@@ -608,7 +634,9 @@ public class Overlay {
         
         AutoOnceEnabled = RDC.auto || ADOBase.controller.noFail;
         StartTile = floor;
-        _lastSavedStartProgress = StartProgress = (float) floor / ADOBase.lm.listFloors.Count;
+        StartProgress = (float) floor / ADOBase.lm.listFloors.Count;
+        _playStartedDuringRender = TUFReplay.SDK.TUFReplaySession.IsActive;
+        _lastSavedStartProgress = _playStartedDuringRender ? -1 : StartProgress;
         LastMultiplier = (float) (ADOBase.conductor.song.pitch * VersionSafe.GetPlanetSpeed(scrController.instance));
         if(!AutoOnceEnabled) PlayCount.AddAttempts(LastHash, StartProgress, LastMultiplier);
         SetupTextManager();
@@ -653,7 +681,7 @@ public class Overlay {
                 _lastSavedStartProgress = -1;
             }
             // ReSharper disable once CompareOfFloatsByEqualityOperator
-            if(StartProgress == OverlayTextManager.GetProgress() && !AutoOnceEnabled) PlayCount.RemoveAttempts(LastHash, StartProgress, LastMultiplier);
+            if(!_playStartedDuringRender && StartProgress == OverlayTextManager.GetProgress() && !AutoOnceEnabled) PlayCount.RemoveAttempts(LastHash, StartProgress, LastMultiplier);
         } catch (Exception e) {
             Main.Instance.LogException("Failed to set play data on hide", e);
         }
