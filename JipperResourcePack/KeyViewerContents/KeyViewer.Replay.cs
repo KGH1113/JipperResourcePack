@@ -69,5 +69,4 @@ public partial class KeyViewer {
         }
         _replayDirtyKeys = 0;
     }
-
 }
