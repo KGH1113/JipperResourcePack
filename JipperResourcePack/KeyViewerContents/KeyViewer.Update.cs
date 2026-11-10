@@ -115,22 +115,13 @@ public partial class KeyViewer {
     }
 
     // TUFReplay feeds recorded input directly while it replays a run, in the game or in a video.
-    // The replay counts from the run's own key counts when TUFReplay saved them, else from the player's.
     internal void SetReplayInput(bool replay) {
         if(replay) {
             if(_replayCounts != null || !Active || KeyCountData.Instance == null) return;
             if(_listening) StopEventListener();
             ResetReplayKeys();
             _replayCounts = new KeyCountData();
-            JipperResourcePack.OtherModApi.TUFReplayAPI.RunState recorded = JipperResourcePack.OtherModApi.TUFReplayAPI.Recorded;
-            if(recorded?.KeyCounts != null) {
-                Array.Copy(recorded.KeyCounts, _replayCounts.Count, Math.Min(recorded.KeyCounts.Length, _replayCounts.Count.Length));
-                _replayCounts.TotalCount = recorded.TotalKeyCount;
-            } else {
-                Array.Copy(KeyCountData.Instance.Count, _replayCounts.Count, _replayCounts.Count.Length);
-                _replayCounts.TotalCount = KeyCountData.Instance.TotalCount;
-            }
-            ShowCounts(_replayCounts);
+            SetReplayCounts(JipperResourcePack.OtherModApi.TUFReplayAPI.Recorded);
             return;
         }
         if(_replayCounts == null) return;
@@ -139,6 +130,23 @@ public partial class KeyViewer {
         ShowCounts(KeyCountData.Instance);
         _eventOffsetTicks = NoEventOffset;
         if(Enabled && !_listening) StartEventListener();
+    }
+
+    // The replay counts from the run's own key counts when TUFReplay saved them, else from the player's.
+    // The counts are replaced, not added to, so the same value handed over twice counts once.
+    internal void SetReplayCounts(JipperResourcePack.OtherModApi.TUFReplayAPI.RunState recorded) {
+        KeyCountData counts = _replayCounts;
+        if(counts == null) return;
+        if(recorded?.KeyCounts != null) {
+            int length = Math.Min(recorded.KeyCounts.Length, counts.Count.Length);
+            Array.Copy(recorded.KeyCounts, counts.Count, length);
+            Array.Clear(counts.Count, length, counts.Count.Length - length);
+            counts.TotalCount = recorded.TotalKeyCount;
+        } else {
+            Array.Copy(KeyCountData.Instance.Count, counts.Count, counts.Count.Length);
+            counts.TotalCount = KeyCountData.Instance.TotalCount;
+        }
+        ShowCounts(counts);
     }
 
     private void ShowCounts(KeyCountData countData) {
