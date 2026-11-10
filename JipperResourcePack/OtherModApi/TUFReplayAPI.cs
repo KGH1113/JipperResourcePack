@@ -20,14 +20,13 @@ public static class TUFReplayAPI {
 
     private static Func<string, object, bool> _register;
     private static Action<string> _unregister;
-    private static Func<string, object, bool> _recordRunEvent;
+    private static Func<object, bool> _addEvent;
 
     private static Provider _provider;
     private static long _replayTicks;
     private static readonly HashSet<RectTransform> RainTransforms = new();
 
-    // The replayed run's value in effect at the replay's time: what it showed as it started, or a
-    // value recorded later in the run. Null when TUFReplay saved nothing for it.
+    // What the replayed run showed as it started. Null when TUFReplay saved nothing for it.
     internal static RunState Recorded { get; private set; }
 
     public static bool TryGetReplayTicks(out long ticks) {
@@ -66,8 +65,16 @@ public static class TUFReplayAPI {
         }
     }
 
-    // Records a value that changes during a run (for example key viewer settings) under a provider id whose state type matches.
-    internal static bool RecordRunEvent(string id, object value) => _recordRunEvent != null && _recordRunEvent(id, value);
+    // Adds a change made during a run, such as new key viewer settings, at this moment of the run.
+    // TUFReplay hands it back at the same moment of the replay, through the Provider's
+    // OnReplayEvent overload for its type. Each kind of change is its own class:
+    //
+    //   internal sealed class KeyViewerStyleChanged { public KeyviewerStyle Style; }
+    //   public void OnReplayEvent(KeyViewerStyleChanged e, long ticks) { ... }   // on Provider
+    //   TUFReplayAPI.AddEvent(new KeyViewerStyleChanged { Style = ... });          // when it changes
+    //
+    // Returns false outside a recorded run, and for a type Provider has no OnReplayEvent for.
+    internal static bool AddEvent(object e) => _addEvent != null && _addEvent(e);
 
     private static bool Resolve() {
         if(_register != null) return true;
@@ -78,12 +85,15 @@ public static class TUFReplayAPI {
 
             MethodInfo register = type.GetMethod("Register", BindingFlags.Public | BindingFlags.Static);
             MethodInfo unregister = type.GetMethod("Unregister", BindingFlags.Public | BindingFlags.Static);
-            MethodInfo recordRunEvent = type.GetMethod("RecordRunEvent", BindingFlags.Public | BindingFlags.Static);
-            if((object) register == null || (object) unregister == null || (object) recordRunEvent == null) continue;
+            MethodInfo getEventStore = type.GetMethod("GetEventStore", BindingFlags.Public | BindingFlags.Static);
+            if((object) register == null || (object) unregister == null || (object) getEventStore == null) continue;
+            object eventStore = getEventStore.Invoke(null, new object[] { ProviderId });
+            MethodInfo addEvent = eventStore?.GetType().GetMethod("AddEvent", BindingFlags.Public | BindingFlags.Instance);
+            if((object) addEvent == null) continue;
 
             _register = (Func<string, object, bool>) Delegate.CreateDelegate(typeof(Func<string, object, bool>), register);
             _unregister = (Action<string>) Delegate.CreateDelegate(typeof(Action<string>), unregister);
-            _recordRunEvent = (Func<string, object, bool>) Delegate.CreateDelegate(typeof(Func<string, object, bool>), recordRunEvent);
+            _addEvent = (Func<object, bool>) Delegate.CreateDelegate(typeof(Func<object, bool>), eventStore, addEvent);
             return true;
         }
         return false;
@@ -92,13 +102,13 @@ public static class TUFReplayAPI {
     // TUFReplay looks these methods up by name on the registered object.
     private sealed class Provider {
         // TUFReplay calls this when it starts recording a run's input, at the countdown or
-        // checkpoint, and saves it as the run's start value. Values that change later in
-        // the run are recorded with RecordRunEvent.
+        // checkpoint, and saves it as the run's start value. Changes made later in the run
+        // are added with AddEvent.
         public RunState CaptureRunState() => RunState.Capture();
 
         // In the game and in videos alike: the replay's keys come only through
         // OnReplayKey, so the live SkyHook listener stops and counts start from a copy
-        // of the player's until OnReplayEvent hands over the run's own.
+        // of the player's until OnReplayState hands over the run's own.
         public void OnReplayBegin(bool render) {
             Recorded = null;
             ReplayActive = true;
@@ -107,13 +117,12 @@ public static class TUFReplayAPI {
         }
 
         // Right after OnReplayBegin, before the level starts, with the run's start value
-        // (null when it has none); then with each value recorded during the run at its time,
-        // and after a seek when a different value is in effect. The overlay reads the
-        // attempts and best when the level starts; the key viewer counts on from the
-        // value's key counts.
-        public void OnReplayEvent(RunState value, long ticks) {
-            Recorded = value;
-            KeyViewer.Instance.SetReplayCounts(value);
+        // (null when it has none), and again after a timeline seek, which starts the run
+        // over. The overlay reads the attempts and best when the level starts; the key
+        // viewer counts on from the value's key counts.
+        public void OnReplayState(RunState state, long ticks) {
+            Recorded = state;
+            KeyViewer.Instance.SetReplayCounts(state);
         }
 
         public void OnReplayEnd() {
