@@ -11,12 +11,12 @@ namespace JipperResourcePack.OtherModApi;
 // the same way whether it plays a run in the game or renders it to video.
 //
 // No compile-time reference to TUFReplay is required.
-public static class TUFReplayAPI {
+public static partial class TUFReplayAPI {
     public const string ProviderId = "JipperResourcePack";
-    public const int RequiredApiVersion = 2;
 
     public static bool ReplayActive;
     private static bool _registered;
+    private static int _apiVersion;
 
     private static Func<string, object, bool> _register;
     private static Action<string> _unregister;
@@ -27,7 +27,7 @@ public static class TUFReplayAPI {
     private static readonly HashSet<RectTransform> RainTransforms = new();
 
     // What the replayed run showed as it started. Null when TUFReplay saved nothing for it.
-    internal static RunState Recorded { get; private set; }
+    internal static RunState Recorded;
 
     public static bool TryGetReplayTicks(out long ticks) {
         ticks = _replayTicks;
@@ -38,7 +38,7 @@ public static class TUFReplayAPI {
         if(_registered) return;
         try {
             if(!Resolve()) return;
-            _provider ??= new Provider();
+            CheckProvider();
             if(_register(ProviderId, _provider)) {
                 _registered = true;
                 Main.Instance.Log("TUFReplay ReplayApi is loaded.");
@@ -47,6 +47,11 @@ public static class TUFReplayAPI {
             Main.Instance.Log("TUFReplay ReplayApi is not loaded.");
             Main.Instance.LogException(e);
         }
+    }
+
+    private static void CheckProvider() {
+        if(_provider != null && _provider.CheckUsableAPIVersion(_apiVersion)) return;
+        _provider = _apiVersion >= 2 ? new ProviderV2() : new ProviderV1();
     }
 
     public static void Shutdown() {
@@ -74,25 +79,47 @@ public static class TUFReplayAPI {
     //   TUFReplayAPI.AddEvent(new KeyViewerStyleChanged { Style = ... });          // when it changes
     //
     // Returns false outside a recorded run, and for a type Provider has no OnReplayEvent for.
-    internal static bool AddEvent(object e) => _addEvent != null && _addEvent(e);
+    internal static void AddEvent(object e) => _addEvent?.Invoke(e);
 
     private static bool Resolve() {
         if(_register != null) return true;
         foreach(Assembly assembly in AppDomain.CurrentDomain.GetAssemblies()) {
             Type type = assembly.GetType("TUFReplay.ReplayApi", false);
             FieldInfo versionField = type?.GetField("ApiVersion", BindingFlags.Public | BindingFlags.Static);
-            if(versionField?.GetValue(null) is not int version || version < RequiredApiVersion) continue;
+            if(versionField?.GetValue(null) is not int version) continue;
+
+            _apiVersion = version;
+
+            if(version < 1) {
+                Main.Instance.Warning($"TUFReplay ReplayApi version {version} is too old, need 1 or higher. Skipping.");
+                continue;
+            }
 
             MethodInfo register = type.GetMethod("Register", BindingFlags.Public | BindingFlags.Static);
             MethodInfo unregister = type.GetMethod("Unregister", BindingFlags.Public | BindingFlags.Static);
-            MethodInfo getEventStore = type.GetMethod("GetEventStore", BindingFlags.Public | BindingFlags.Static);
-            if((object) register == null || (object) unregister == null || (object) getEventStore == null) continue;
-            object eventStore = getEventStore.Invoke(null, new object[] { ProviderId });
-            MethodInfo addEvent = eventStore?.GetType().GetMethod("AddEvent", BindingFlags.Public | BindingFlags.Instance);
-            if((object) addEvent == null) continue;
+            if((object) register == null || (object) unregister == null) {
+                Main.Instance.Warning($"TUFReplay ReplayApi version {version} is missing Register or Unregister method. Skipping.");
+                continue;
+            }
 
             _register = (Func<string, object, bool>) Delegate.CreateDelegate(typeof(Func<string, object, bool>), register);
             _unregister = (Action<string>) Delegate.CreateDelegate(typeof(Action<string>), unregister);
+
+            if(version < 2) return true;
+
+            MethodInfo getEventStore = type.GetMethod("GetEventStore", BindingFlags.Public | BindingFlags.Static);
+            if((object) getEventStore == null) {
+                Main.Instance.Warning($"TUFReplay ReplayApi version {version} is missing GetEventStore method.");
+                return true;
+            }
+
+            object eventStore = getEventStore.Invoke(null, new object[] { ProviderId });
+            MethodInfo addEvent = eventStore?.GetType().GetMethod("AddEvent", BindingFlags.Public | BindingFlags.Instance);
+            if((object) addEvent == null) {
+                Main.Instance.Warning($"TUFReplay ReplayApi version {version} is missing AddEvent method on its event store.");
+                return true;
+            }
+
             _addEvent = (Func<object, bool>) Delegate.CreateDelegate(typeof(Func<object, bool>), eventStore, addEvent);
             return true;
         }
@@ -100,7 +127,9 @@ public static class TUFReplayAPI {
     }
 
     // TUFReplay looks these methods up by name on the registered object.
-    private sealed class Provider {
+    private abstract class Provider {
+        public abstract bool CheckUsableAPIVersion(int version);
+
         // TUFReplay calls this when it starts recording a run's input, at the countdown or
         // checkpoint, and saves it as the run's start value. Changes made later in the run
         // are added with AddEvent.
@@ -109,21 +138,13 @@ public static class TUFReplayAPI {
         // In the game and in videos alike: the replay's keys come only through
         // OnReplayKey, so the live SkyHook listener stops and counts start from a copy
         // of the player's until OnReplayState hands over the run's own.
-        public void OnReplayBegin(bool render) {
-            Recorded = null;
-            ReplayActive = true;
-            _replayTicks = 0;
-            SetInputSuspended(true);
-        }
+        // public void OnReplayBegin(bool render);
 
         // Right after OnReplayBegin, before the level starts, with the run's start value
         // (null when it has none), and again after a timeline seek, which starts the run
         // over. The overlay reads the attempts and best when the level starts; the key
         // viewer counts on from the value's key counts.
-        public void OnReplayState(RunState state, long ticks) {
-            Recorded = state;
-            KeyViewer.Instance.SetReplayCounts(state);
-        }
+        // public void OnReplayState(RunState state, long ticks);
 
         public void OnReplayEnd() {
             RestoreRainDepths();
